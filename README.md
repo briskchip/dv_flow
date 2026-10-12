@@ -7,7 +7,7 @@ YAML + Jinja2 driven design-verification flow: compile, elaborate, simulate — 
 - Python **3.8** or newer
 - `PyYAML >= 5.1` and `Jinja2 >= 2.11`: `pip install -r requirements.txt`
 - everything else is the Python standard library
-- bash to run the generated job scripts; Slurm client commands for cluster runs
+- tcsh (default) or sh to run the generated job scripts; Slurm client commands for cluster runs
 
 Full documentation: `doc/dv_flow_user_guide.docx`, training deck: `doc/dv_flow_training.pptx`.
 
@@ -16,7 +16,7 @@ Full documentation: `doc/dv_flow_user_guide.docx`, training deck: `doc/dv_flow_t
 | File | Purpose |
 |---|---|
 | `dv_flow.py` | the command you run (checks Python / packages, then starts `dvflow`) |
-| `dvflow/` | the code, one module per job: `flow.py` (config to jobs), `runner.py` (run / submit), `jobscript.py` (run.sh, .cmd, sbatch), `tracker.py` (slurm status), `templates.py` (Jinja + YAML), `testlist.py`, `phase_args.py`, `jobs.py`, `utils.py`, `constants.py`, `errors.py`, `cli.py` |
+| `dvflow/` | the code, one module per job: `flow.py` (config to jobs), `runner.py` (run / submit), `jobscript.py` (per-phase .csh/.sh scripts, sbatch/srun), `tracker.py` (slurm status), `templates.py` (Jinja + YAML), `testlist.py`, `phase_args.py`, `jobs.py`, `utils.py`, `constants.py`, `errors.py`, `cli.py` |
 | `scripts/check_log.py` | post-simulation PASS/FAIL check, writes `test_status.yml` |
 | `requirements.txt` | Python packages |
 | `example/` | sample project: copy it to start your own (paths below are relative to it) |
@@ -75,14 +75,36 @@ Masters can include other masters. Include paths are searched in the file's own 
 - **Jinja** – config and test lists are rendered before YAML parsing. Context: `env`, `model`,
   `test.*`, `seed`, `time`, `gui`, `mode`, `variables`, and `-D KEY=VALUE`.
   The config is rendered per job, so `{{ seed }}` / `{{ test.testname }}` work anywhere in it.
-- **Slurm** – `enable`, `mode: batch|interactive`, `gui`, `options`, `gui_options`, `partition`.
+- **Slurm** – `enable`, `mode: interactive|batch`, `gui`, `options`, `gui_options`, `partition`.
+  The default mode is **interactive** (`srun --pty`, one job at a time in your terminal). Use
+  `--mode=batch` (or `--wait`, which implies batch) to submit with `sbatch` and run tests in parallel.
   Job name defaults to `testname.seed.time`. In batch mode, test jobs depend on the build job
-  (`--dependency=afterok`). Every job writes a reproducible `run.sh` into its directory, plus one `<phase>.<sub>.cmd` file per step (the exact command; `run.sh` executes these) and a `<phase>.<sub>.log` per step.
+  (`--dependency=afterok`). Every job writes its scripts into its directory, see Job scripts below, and a `<phase>.<sub>.log` per step.
   Steps run in order and the first failing step stops the job (later steps are skipped); if the build job fails, test jobs are skipped.
 - **Log checks** – a phase's `fail_patterns` (compile: `error-`, case-insensitive) are searched in each
   step's log; a match fails the step even when the tool exits 0, and the next steps don't run.
 - **UVM quit count** – sim runs with `+UVM_MAX_QUIT_COUNT=10,NO` by default. Change it globally with
   `-D uvm_max_quit_count=N`, or per testcase with `max_quit_count: N` in the test list.
+
+## Job scripts (tcsh and sh)
+
+Each job directory gets, for every phase, a tcsh script `<phase>.csh` and an sh script `<phase>.sh`
+holding that phase's `pre_phase`, `phase` and `post_phase` commands, plus `run.csh` / `run.sh` that run
+the phases in order:
+
+```
+out/dut_a/build/          compile.csh compile.sh  elab.csh elab.sh  run.csh run.sh
+out/dut_a/tests/smoke.1/  sim.csh sim.sh  run.csh run.sh
+```
+
+A phase script prints each command (`=== [compile.phase] vlogan ...`), logs each step to
+`<phase>.<sub>.log`, checks the phase's `fail_patterns`, and stops at the first failing step
+(`FAIL <step> ...` in `dv_flow.status`). `tcsh -f compile.csh` or `sh compile.sh` re-runs one phase.
+
+`job_shell: tcsh` (default; also `csh`, `sh`) or `--shell=sh` picks the set that dv_flow and slurm run;
+both are always written. In tcsh mode step commands are C shell: `>& file`, `` `cmd` ``, `setenv`; the
+scripts set `nonomatch` so unmatched `[..]`/`*` are passed on. Local runs execute the same `run.csh`; if
+the shell is not installed (e.g. tcsh on Windows) the steps run from Python with the system shell.
 
 ## Pass/fail checking
 
@@ -99,7 +121,7 @@ Every job writes `dv_flow.status` in its directory (`RUNNING`, then `PASS` or `F
 result does not depend on slurm accounting. A batch submission saves a manifest in `<out_dir>/jobs/`.
 
 ```bash
-python dv_flow.py -m dut_a -t regression --slurm --wait          # submit, wait, print pass/fail
+python dv_flow.py -m dut_a -t regression --slurm --wait          # batch: submit, wait, print pass/fail
 python dv_flow.py --track                                        # status of the latest submission
 python dv_flow.py --track out/jobs/dut_a_<time>.yml --wait --poll 60
 ```
@@ -115,8 +137,9 @@ test list, or for a whole run with `--slurm-timeout=30m`. Formats: `1h`, `90m`, 
 `45` (minutes), `01:30:00`, `1-00:00:00`, `unlimited`. A job that hits the limit is reported as
 `killed by SIGTERM` / `FAIL (slurm TIMEOUT)`.
 
-Killed jobs: `run.sh` traps SIGTERM (what slurm sends on `scancel`, time limit or preemption) and writes
-`FAIL <step> killed by SIGTERM ...`; a step killed with a signal is recorded as `rc=137 (signal KILL)`.
+Killed jobs: `run.sh` (sh) traps SIGTERM (what slurm sends on `scancel`, time limit or preemption) and writes
+`FAIL <step> killed by SIGTERM ...`; tcsh cannot trap SIGTERM, so with `run.csh` the status stays `RUNNING`
+and the tracker reports slurm's reason from `sacct`; a step killed with a signal is recorded as `rc=137 (signal KILL)`.
 If the whole job is SIGKILLed (node lost, KillWait expired) the status stays `RUNNING`, and the tracker
 reports slurm's own state from `sacct` (`CANCELLED`, `TIMEOUT`, `OUT_OF_MEMORY`, `NODE_FAIL`, `PREEMPTED`),
 or `FAIL (job died)` if the job is gone from both `squeue` and `sacct`.

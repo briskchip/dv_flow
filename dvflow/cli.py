@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from .constants import SLURM_MODES
+from .constants import JOB_SHELLS, SLURM_MODES
 from .errors import FlowError
 from .flow import Flow
 from .runner import Runner, latest_manifest
@@ -24,9 +24,9 @@ examples:
   # run two testcases, add sim args from the command line
   python dv_flow.py --model=dut_a --testcase=smoke,rand_read -a "sim+=+UVM_VERBOSITY=UVM_HIGH"
 
-  # slurm: batch and wait for results, or interactive with a GUI
-  python dv_flow.py --model=dut_a --testcase=regression --slurm --wait
-  python dv_flow.py --model=dut_a --phase=sim --testcase=smoke --slurm --mode=interactive --gui
+  # slurm: interactive (default, srun) with a GUI, or batch (sbatch) and wait for results
+  python dv_flow.py --model=dut_a --phase=sim --testcase=smoke --slurm --gui
+  python dv_flow.py --model=dut_a --testcase=regression --slurm --mode=batch --wait
 
   # status of the latest slurm submission
   python dv_flow.py --track
@@ -96,8 +96,11 @@ def build_parser():
     g = p.add_mutually_exclusive_group()
     g.add_argument("--slurm", dest="slurm", action="store_true", default=None, help="run jobs through slurm")
     g.add_argument("--local", dest="slurm", action="store_false", help="run jobs locally (ignore slurm.enable)")
-    p.add_argument("--mode", choices=SLURM_MODES, help="slurm mode (overrides slurm.mode)")
+    p.add_argument("--mode", choices=SLURM_MODES, help="slurm mode (overrides slurm.mode; default interactive, --wait implies batch)")
     p.add_argument("--gui", action="store_true", help="GUI job (adds slurm gui_options, sets {{ gui }})")
+    p.add_argument("--shell", choices=JOB_SHELLS,
+                   help="job scripts to run: tcsh/csh -> run.csh + <phase>.csh, sh -> run.sh + <phase>.sh "
+                        "(both sets are always written; default: job_shell in the config, else tcsh)")
     # output / inspection
     p.add_argument("-n", "--dry-run", action="store_true", help="print commands, run nothing")
     p.add_argument("-q", "--quiet", action="store_true", help="don't echo tool output (logs still written)")
@@ -106,7 +109,8 @@ def build_parser():
                    help="list the tests of --model, or of every model when --model is not given")
     # slurm tracking
     p.add_argument("--wait", action="store_true",
-                   help="slurm batch: wait until all submitted jobs finish, then print pass/fail")
+                   help="slurm batch: wait until all submitted jobs finish, then print pass/fail "
+                        "(implies --mode=batch)")
     p.add_argument("--track", nargs="?", const="latest", metavar="MANIFEST",
                    help="show the status of submitted slurm jobs (default: latest manifest); "
                         "with --wait, wait for them to finish")

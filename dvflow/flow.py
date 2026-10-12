@@ -16,8 +16,8 @@ import re
 import sys
 from pathlib import Path
 
-from .constants import (DEFAULT_SLURM, DEFAULT_WAVE_FILE, DEFAULT_WAVES, NO_TEST, PHASE_SCOPES, SLURM_MODES,
-                        SUBPHASE_KEYS, SUBPHASES)
+from .constants import (DEFAULT_JOB_SHELL, DEFAULT_SLURM, DEFAULT_WAVE_FILE, DEFAULT_WAVES, JOB_SHELLS, NO_TEST,
+                        PHASE_SCOPES, SLURM_MODES, SUBPHASE_KEYS, SUBPHASES)
 from .errors import FlowError
 from .jobs import Job, Step
 from .phase_args import merge_phase_args
@@ -155,6 +155,8 @@ class Flow:
             scfg["enable"] = a.slurm
         if a.mode:
             scfg["mode"] = a.mode
+        elif a.wait and not extra:                       # --wait tracks sbatch jobs: it implies batch
+            scfg["mode"] = "batch"
         if a.gui:
             scfg["gui"] = True
         if a.slurm_mem:
@@ -189,6 +191,13 @@ class Flow:
                              self.defines, self.include_dirs)
 
     # ----------------------------------------------------------------- planning
+    def job_shell(self, cfg):
+        """Shell of the job scripts that are run: --shell, else `job_shell:`, else tcsh."""
+        shell = self.args.shell or cfg.get("job_shell") or DEFAULT_JOB_SHELL
+        if shell not in JOB_SHELLS:
+            raise FlowError(f"job_shell must be one of {JOB_SHELLS}, got '{shell}'")
+        return shell
+
     def make_job(self, kind, model, phases, test, seed, phase_args, coverage=False, dump_waves=False):
         """Build one Job: render the config for this test/seed and assemble each step's command."""
         scfg0 = self.slurm_cfg(self.cfg, self.model_cfg(self.cfg, model), test=test)
@@ -247,7 +256,7 @@ class Flow:
                                   phase_defs[phase]["fail_patterns"]))
         return Job(name=name, kind=kind, model=model, directory=directory, phases=phases,
                    steps=steps, slurm=scfg, test=test or {}, seed=seed,
-                   timeout=self.job_timeout(kind, test or {}, scfg), files=files)
+                   timeout=self.job_timeout(kind, test or {}, scfg), files=files, shell=self.job_shell(cfg))
 
     def job_timeout(self, kind, test, scfg):
         """Slurm --time: --slurm-timeout > testcase slurm_timeout > slurm.timeout (build: build_timeout,
@@ -365,7 +374,8 @@ class Flow:
         print(f"dv_flow: opening {wave.as_posix()}")
         return [Job(name=render(wcfg.get("job_name")), kind="view", model=model or "-",
                     directory=wave.parent / "waves_view", phases=["waves"], steps=[Step("waves", "view", cmd)],
-                    slurm=scfg, test=test, timeout=self.job_timeout("view", test, scfg))]
+                    slurm=scfg, test=test, timeout=self.job_timeout("view", test, scfg),
+                    shell=self.job_shell(cfg))]
 
     # ------------------------------------------------------------------ output
     def jobs_dir(self):

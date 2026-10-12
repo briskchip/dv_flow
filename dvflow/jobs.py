@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .constants import RUN_SCRIPT
 
 
 @dataclass
@@ -16,12 +15,8 @@ class Step:
 
     @property
     def tag(self):
-        """'sim.phase' - used for log and .cmd file names."""
+        """'sim.phase' - used for the step's log name: sim.phase.log."""
         return f"{self.phase}.{self.sub}"
-
-    @property
-    def cmd_file(self):
-        return f"{self.tag}.cmd"
 
 
 @dataclass
@@ -46,10 +41,26 @@ class Job:
     files: dict = field(default_factory=dict)   # extra files written into the directory: name -> content
     status: str = "PENDING"       # PASS / FAIL ... / SUBMITTED ... / SKIPPED ... / DRY-RUN
     slurm_id: str = None          # set after sbatch
+    shell: str = "tcsh"           # tcsh | csh -> run.csh, sh -> run.sh
+
+    @property
+    def ext(self):
+        """Extension of the scripts this job runs: 'csh' or 'sh'."""
+        return "sh" if self.shell == "sh" else "csh"
 
     @property
     def script(self):
-        return self.directory / RUN_SCRIPT
+        """run.csh or run.sh: the whole job; this is what slurm runs."""
+        return self.directory / f"run.{self.ext}"
+
+    def phase_groups(self):
+        """[(phase, [steps])] in run order."""
+        groups = []
+        for st in self.steps:
+            if not groups or groups[-1][0] != st.phase:
+                groups.append((st.phase, []))
+            groups[-1][1].append(st)
+        return groups
 
     @property
     def label(self):

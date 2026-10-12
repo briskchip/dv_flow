@@ -33,7 +33,8 @@ dvflow/
   testlist.py               test list loading, sections, coverage/waves/timeout merge
   jobs.py                   Job / Step objects
   flow.py                   Flow: plan(), plan_view(), find_wave_file(), slurm_cfg(), list(), list_tests()
-  jobscript.py              write_job_files, write_cmd_files, write_script (run.sh), slurm_command
+  jobscript.py              per-phase scripts: csh_phase_script, sh_phase_script, csh_run_script, sh_run_script,
+                            write_script (writes both sets), script_command, slurm_command
   runner.py                 Runner: run_local, run_slurm, execute, summary, write_manifest
   tracker.py                squeue/sacct job tracking (--track, --wait, --poll)
   cli.py                    argparse options and main()
@@ -130,8 +131,8 @@ python dv_flow.py --list
 python dv_flow.py --model=dut_a --list-test
 python dv_flow.py --model=dut_a --phase=compile,elab
 python dv_flow.py --model=dut_a --testcase=smoke,rand_read -a "sim+=+UVM_VERBOSITY=UVM_HIGH"
-python dv_flow.py --model=dut_a --testcase=regression --slurm --wait
-python dv_flow.py --model=dut_a --phase=sim --testcase=smoke --slurm --mode=interactive --gui
+python dv_flow.py --model=dut_a --testcase=regression --slurm --wait       # --wait implies batch
+python dv_flow.py --model=dut_a --phase=sim --testcase=smoke --slurm --gui   # interactive (default)
 python dv_flow.py --track --wait
 python dv_flow.py --model=dut_a --testcase=smoke --dump-waves
 python dv_flow.py --model=dut_a --testcase=smoke --open-waves --slurm-mem=32G
@@ -141,12 +142,21 @@ python dv_flow.py --model=dut_a --testcase=smoke --open-waves --slurm-mem=32G
 
 ## 6. Execution and failure handling
 
-- Every step writes `<step>.cmd` (the exact command) and `<step>.log`.
+- **Job scripts:** per phase `<phase>.csh` (tcsh) and `<phase>.sh` (sh), each holding the phase's pre_phase, phase and post_phase commands. `run.csh` and `run.sh` run the phases in order. Both sets are always written. `job_shell: tcsh|csh|sh` (master config, default tcsh) or `--shell` picks which set dv_flow and Slurm run. There are no per-step `.cmd` files any more.
+- Step runner in a phase script: tcsh uses `( cmd ; echo $status > X.rc ) |& tee X.log`; sh uses a multi-line `( cmd \n echo $? > X.rc ) 2>&1 | tee X.log`. Every step writes `<phase>.<sub>.log`.
+- Local runs execute `run.csh` / `run.sh` themselves. When that shell is missing (Windows has no tcsh), Runner.run_steps runs the steps from Python with `shell=True`.
 - Steps run in order. **The first failing step stops the job**: the remaining steps are skipped and `status` gets `FAIL <step> <why>`.
 - A step fails on a non-zero rc or on a `fail_patterns` match. Compile fails on `error-` in its log.
 - UVM_ERROR and UVM_FATAL do **not** stop the sim phase itself. `+UVM_MAX_QUIT_COUNT=10,NO` is the default, and the pass/fail verdict comes from `check_log.py` in post_phase.
 - Test jobs depend on the build job and are skipped if the build failed.
-- run.sh (used on Slurm) traps signals, writes the status file, and maps rc > 128 to a signal name (killed, timeout and similar).
+- run.sh traps TERM and INT and writes the status file. run.csh only has `onintr` (SIGINT), because csh cannot trap SIGTERM, so the tracker relies on sacct for cancelled or timed-out jobs. Both map rc > 128 to a signal name.
+- **csh gotchas (all fixed in the generator):**
+  - A here-document's end marker must be written with its quotes (`'DV_FLOW_EOF'`).
+  - A one-line `if (..) echo > file` truncates the file even when the condition is false, so use if/then/endif.
+  - bsd-csh reports a signal exit as a negative `$status`, so add 256.
+  - `nonomatch` is needed so `[pre]` and similar patterns are passed on unchanged.
+  - csh expands `{a,b}`.
+- csh/tcsh/sh tests run in WSL Ubuntu-22.04 (tcsh, bsd-csh, dash). Jinja2 is installed into `scratchpad/wslpy`, and the test script is `scratchpad/csh/test_csh.sh`.
 
 ### check_log.py
 Profiles and keywords are configured in `common/log_check.yml`. It greps the sim log and writes `test_status.yml`. **All script output is YAML** (manifests, status and check results); there is no JSON.
@@ -155,6 +165,7 @@ Profiles and keywords are configured in `common/log_check.yml`. It greps the sim
 
 ## 7. Slurm
 
+- **Default mode is interactive** (`slurm.mode: interactive` in constants.py DEFAULT_SLURM and master_config.yml). `--mode=batch` selects sbatch, and `--wait` without `--mode` implies batch (not for the `--open-waves` viewer).
 - **sbatch (batch)**: submits and returns at once, so jobs run in parallel. The flow uses `--parsable` to get the job id. Test jobs use `--dependency=afterok:<build id>`. Output is a manifest at `<out_dir>/jobs/<model>_<time>.yml`.
 - **srun (interactive)**: blocking and attached to the terminal (`--pty`). Use it for debug and GUI work. It produces no manifest.
 - `--gui` adds `gui_options` (`--x11`) and makes the sim run with `-gui=<debug_tool>` (DVE).

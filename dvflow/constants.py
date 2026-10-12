@@ -23,7 +23,7 @@ NO_TEST = {"name": "build", "testname": "build", "description": "", "section": "
 # `slurm:` section and a model's own `slurm:` block are deep-merged on top.
 DEFAULT_SLURM = {
     "enable": False,
-    "mode": "batch",
+    "mode": "interactive",                                # srun --pty; batch = sbatch (--mode=batch, --wait)
     "gui": False,
     "partition": None,
     "options": [],                                        # added to every job
@@ -52,7 +52,11 @@ DEFAULT_WAVES = {
 DEFAULT_WAVE_FILE = "waves.vpd"
 
 # Files written into every job directory.
-RUN_SCRIPT = "run.sh"                 # the whole job; this is what slurm runs
+# Every job directory gets two sets of scripts with the same steps:
+#   <phase>.csh + run.csh   (tcsh / csh)      <phase>.sh + run.sh   (POSIX sh)
+# `job_shell` (config) or --shell picks the set that dv_flow and slurm run.
+JOB_SHELLS = ("tcsh", "csh", "sh")
+DEFAULT_JOB_SHELL = "tcsh"
 STATUS_FILE = "dv_flow.status"        # RUNNING, then PASS or FAIL <step> <reason>
 TEST_STATUS_FILE = "test_status.yml"  # written by scripts/check_log.py
 

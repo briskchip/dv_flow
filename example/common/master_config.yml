@@ -82,12 +82,21 @@ phases:
     test_args: "+UVM_TESTNAME={{ test.testname }}"
 
 # -----------------------------------------------------------------------------
+# Job scripts. Every job directory gets, for each phase, <phase>.csh (tcsh) and
+# <phase>.sh (sh) holding its pre_phase, phase and post_phase commands, plus
+# run.csh / run.sh that run the phases in order. job_shell picks the set that
+# dv_flow and slurm run: tcsh | csh | sh (per run: --shell).
+# -----------------------------------------------------------------------------
+job_shell: tcsh
+
+# -----------------------------------------------------------------------------
 # Slurm. Command-line overrides: --slurm/--local, --mode batch|interactive, --gui
 # A model can override any of these with its own `slurm:` block.
 # -----------------------------------------------------------------------------
 slurm:
   enable: false
-  mode: batch                  # batch (sbatch, parallel) | interactive (srun --pty, blocking)
+  mode: interactive            # interactive (srun --pty, blocking, default) | batch (sbatch, parallel;
+                               # --mode=batch, or --wait which implies batch)
   gui: false
   partition: dv
   mem: 8G                      # --mem; per testcase: slurm_mem, per run: --slurm-mem

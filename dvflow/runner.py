@@ -2,6 +2,7 @@
 
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,7 @@ import yaml
 
 from .constants import STATUS_FILE
 from .errors import FlowError
-from .jobscript import slurm_command, write_script
+from .jobscript import script_command, slurm_command, write_script
 from .tracker import track_jobs
 from .utils import describe_signal
 
@@ -19,16 +20,50 @@ class Runner:
     def __init__(self, flow):
         self.flow = flow
         self.args = flow.args
+        self.warned = set()
 
     # ------------------------------------------------------------------ local
     def run_local(self, job):
-        """Run the steps of a job one by one; stop at the first failure."""
+        """Run the job's run.csh / run.sh, the same script slurm runs.
+
+        When that shell is not installed (e.g. tcsh on Windows), the steps are run
+        one by one from Python with the system shell instead.
+        """
+        cmd = script_command(job, job.script.name)
+        if not shutil.which(cmd[0]):
+            if cmd[0] not in self.warned:
+                print(f"  dv_flow: note: {cmd[0]} not found, running the steps with the system shell")
+                self.warned.add(cmd[0])
+            return self.run_steps(job)
+        print(f"  -> {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd, cwd=job.directory, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, errors="replace")
+        for line in proc.stdout:
+            if not self.args.quiet:
+                sys.stdout.write("     " + line)
+        rc = proc.wait()
+        try:
+            status = (job.directory / STATUS_FILE).read_text(encoding="utf-8").strip()
+        except OSError:
+            status = ""
+        if rc == 0 and status == "PASS":
+            job.status = "PASS"
+            return True
+        # "FAIL compile.phase rc=2" -> "FAIL (compile.phase rc=2, log: <dir>/compile.phase.log)"
+        detail = status[5:] if status.startswith("FAIL ") else f"rc={rc}{describe_signal(rc)}"
+        log = job.directory / f"{detail.split()[0]}.log"
+        job.status = f"FAIL ({detail}" + (f", log: {log.as_posix()})" if log.exists() else ")")
+        print(f"  !! failed: {detail}")
+        return False
+
+    def run_steps(self, job):
+        """Run the steps of a job one by one from Python; stop at the first failure."""
         for i, st in enumerate(job.steps):
             print(f"  -> [{st.tag}] {st.cmd}")
             log = job.directory / f"{st.tag}.log"
             fail_re = re.compile("|".join(f"(?:{x})" for x in st.fail_patterns), re.I) if st.fail_patterns else None
             hit = None
-            with open(log, "w", encoding="utf-8") as fh:   # the command itself is in <step>.cmd
+            with open(log, "w", encoding="utf-8") as fh:
                 proc = subprocess.Popen(st.cmd, shell=True, cwd=job.directory, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, text=True, errors="replace")
                 for n, line in enumerate(proc.stdout, start=1):
@@ -42,7 +77,7 @@ class Runner:
                 why = f"rc={rc}{describe_signal(rc)}" if rc != 0 else f"error in log, line {hit}"
                 rest = [s.tag for s in job.steps[i + 1:]]
                 print(f"  !! [{st.tag}] failed ({why})" + (f", skipping: {', '.join(rest)}" if rest else ""))
-                job.status = f"FAIL ({st.tag} {why}, log: {log})"
+                job.status = f"FAIL ({st.tag} {why}, log: {log.as_posix()})"
                 (job.directory / STATUS_FILE).write_text(f"FAIL {st.tag} {why}\n", encoding="utf-8")
                 return False
         job.status = "PASS"

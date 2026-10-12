@@ -2,7 +2,7 @@
 
 Each poll costs one squeue call for all jobs (QUERY_CHUNK ids per call) and
 one sacct call for jobs no longer in the queue; then the status files written
-by run.sh are read. The result of a job, in order of trust:
+by run.csh are read. The result of a job, in order of trust:
 
   1. dv_flow.status says PASS / FAIL ...           -> that (+ reason from test_status.yml)
   2. squeue lists the job                          -> PENDING / RUNNING ...
@@ -78,7 +78,7 @@ def job_result(job, states):
     status = _read(directory / STATUS_FILE)
     state = states.get(job["slurm_id"])
     if status and status != "RUNNING":
-        result = status                                  # run.sh finished: PASS or FAIL <step>
+        result = status                                  # run.csh finished: PASS or FAIL <step>
     elif state in SLURM_ACTIVE:
         return state                                     # still queued or running
     elif state:
