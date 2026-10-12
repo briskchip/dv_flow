@@ -1,0 +1,65 @@
+# =============================================================================
+# Master test list: shared variables, anchors and field reference.
+#
+# A test list pulls it in with, as its first line:
+#     {% include 'common_tests.yml' %}
+# (paths are searched in the test list's dir, -I dirs, $DV_FLOW_INCLUDE, then
+# parent dirs.) Its anchors can then be used with *name / <<: *name, and
+# top-level keys in both files (variables:, sections:, ...) are deep-merged
+# with the including file winning. A `sections:` defined here is therefore
+# shared by every test list that includes this file.
+#
+# Rendered with Jinja2 before YAML parse. Context: env, model, config
+# variables (out_dir, verbosity, ...), variables below, -D defines.
+#
+# Entry fields:
+#   testcase    - unique name, used with -t/--testcase on the command line
+#   testname    - UVM test class (+UVM_TESTNAME), also used for the slurm job name
+#   description - free text
+#   phase_args  - extra args per phase: {sim: "...", "sim.pre": "...", compile: ...}
+#                 overridden by --phase-args on the command line.
+#                 Keys with a field change that cmd/opts/args from config.yml:
+#                   "sim.opts": "..."    replace sim opts
+#                   "sim.opts+": "..."   append to sim opts
+#                   "sim.post.cmd": ""   skip the sim post_phase step
+#   seed        - integer, or "random". With count > 1 an integer seed gives
+#                 seed, seed+1, ...; "random" gives a new random seed per run
+#   count       - number of runs
+#   coverage    - true/false: run this test with coverage (default false)
+#   log_profile - pass/fail rules profile from common/log_check.yml (default: uvm)
+#   waves       - true: dump waves (VPD) in this test; open them with --open-waves
+#   slurm_mem   - slurm memory for this test's jobs, e.g. 16G (default: slurm.mem)
+#   slurm_timeout - slurm time limit for this test's jobs (default: slurm.timeout = 1h),
+#                 e.g. 30m, 2h, 2h30m, 01:30:00; also usable as a section default.
+#                 The --slurm-timeout option overrides it for a run.
+#   <anything>  - extra fields are available in config.yml as test.<field>;
+#                 config.yml uses test.verbosity, test.timeout, test.max_quit_count
+#
+# A section is either a plain list of tests, or a mapping with defaults for
+# all its tests plus `tests:`. A test's own field overrides the section's.
+#
+# Many testcases may share one testname (UVM test) with different
+# phase_args / options; the flow runs the sim with +UVM_TESTNAME=<testname>.
+# =============================================================================
+
+variables:
+  regress_count: 5              # default count for regression tests (-D regress_count=N)
+
+# -----------------------------------------------------------------------------
+# Anchors: the flow ignores the `anchors:` key; it holds &definitions only.
+# -----------------------------------------------------------------------------
+anchors:
+  # section defaults - use as `<<: *sanity_defaults` in a section mapping
+  sanity_defaults: &sanity_defaults
+    seed: 1
+    count: 1
+    coverage: false
+
+  regress_defaults: &regress_defaults
+    seed: random
+    count: {{ regress_count }}
+    coverage: true
+
+  # reusable phase_args
+  low_verbosity: &low_verbosity
+    sim: +UVM_VERBOSITY=UVM_LOW

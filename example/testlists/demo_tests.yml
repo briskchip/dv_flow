@@ -1,0 +1,29 @@
+{% include 'common_tests.yml' %}
+# Test list for the echo-only demo model (field reference: common_tests.yml)
+sections:
+  sanity:
+    <<: *sanity_defaults
+    tests:
+      - testcase: smoke
+        testname: demo_smoke_test
+        description: Smoke test
+        phase_args:
+          sim: +sanity=1
+
+  regression:
+    <<: *regress_defaults     # coverage on for every test here
+    tests:
+{% for n in range(1, 3) %}
+      - testcase: rand_{{ n }}
+        testname: demo_rand_test
+        description: Random test {{ n }} on model {{ model }}
+        phase_args:
+          sim: +variant={{ n }}
+          # raw/endraw defers rendering to job time, when seed is known
+          sim.pre: "seed={% raw %}{{ seed }}{% endraw %}"
+        seed: {{ 10 * n }}
+        count: 2
+{% if n == 2 %}
+        coverage: false       # test-level setting overrides the section
+{% endif %}
+{% endfor %}

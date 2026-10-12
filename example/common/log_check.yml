@@ -1,0 +1,50 @@
+# =============================================================================
+# Pass/fail rules for scripts/check_log.py (sim post_phase).
+#
+# Each profile has three lists of Python regexes:
+#   fail     any matching line fails the test
+#   require  each must match at least once, otherwise the test fails
+#   ignore   matching lines are skipped (waivers for known messages)
+# `extends: <profile>` adds a profile's lists on top of another profile's.
+#
+# Pick a profile per testcase with `log_profile: <name>` in the test list,
+# or add one-off patterns with phase args, e.g.
+#   --phase-args="sim.post.opts+=--require 'TEST PASSED'"
+# =============================================================================
+profiles:
+
+  # Plain UVM testbench
+  uvm:
+    fail:
+      - '^\s*UVM_(ERROR|FATAL)\s*:\s*[1-9]'   # report summary counts
+      - 'UVM_FATAL\s*(@|\()'                   # fatal message (sim may stop before the summary)
+      - '^Error-\['                            # VCS runtime error
+      - '^\*E[,\s]'                            # Xcelium error
+      - 'Offending'                            # SVA assertion failure
+      - '(?i)segmentation fault|core dumped|stack overflow'
+    require:
+      - '--- UVM Report Summary ---'           # sim reached the end of the UVM flow
+    ignore: []
+
+  # UVM + a testbench that prints an explicit verdict
+  uvm_verdict:
+    extends: uvm
+    require:
+      - 'TEST PASSED'
+    fail:
+      - 'TEST FAILED'
+
+  # Error tests: UVM_ERRORs are expected; only fatals/crashes fail
+  uvm_expect_errors:
+    fail:
+      - 'UVM_FATAL\s*(@|\()'
+      - '(?i)segmentation fault|core dumped'
+    require:
+      - '--- UVM Report Summary ---'
+
+  # Echo-only demo model
+  demo:
+    fail:
+      - 'UVM_(ERROR|FATAL)\s*:\s*[1-9]'
+    require:
+      - '\+UVM_TESTNAME='

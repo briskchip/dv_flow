@@ -1,0 +1,8 @@
+# dv_flow requirements - Python 3.8 or newer
+#   pip install -r requirements.txt
+#
+# Everything else used by dv_flow.py, dvflow/ and scripts/check_log.py is in the
+# Python standard library: argparse, copy, dataclasses, datetime, fnmatch,
+# getpass, os, pathlib, random, re, shlex, signal, subprocess, sys, time.
+PyYAML>=5.1      # reading configs / test lists, writing manifests and test_status.yml
+Jinja2>=2.11     # templating ({{ }}, {% %}); 2.11+ for ChainableUndefined

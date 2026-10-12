@@ -1,0 +1,95 @@
+{% include 'common/master_config.yml' %}
+# =============================================================================
+# Project config. Variables, phases, slurm settings and anchors come from
+# common/master_config.yml (included above). Any top-level key written here is
+# deep-merged over the master's: same name -> this file wins.
+#
+# Run another project config the same way:  python dv_flow.py -c <file> ...
+# =============================================================================
+
+# Project-specific variables / overrides of the master's (merged)
+variables:
+  tb_top: tb_top                       # e.g. override the master's value here
+
+# -----------------------------------------------------------------------------
+# Models. Each model defines its phases, each phase is split into
+# pre_phase / phase / post_phase, and each of those has cmd, opts, args
+# (string or list). The executed command line is:  cmd opts args <phase args>
+# Only `cmd` is needed: opts and args are optional, and so are pre_phase /
+# post_phase. A sub-phase without a cmd is skipped.
+# Phase args (test list `phase_args` / --phase-args) go to the `phase`
+# sub-phase by default; target others with "sim.pre" / "sim.post".
+# To change a sub-phase's cmd/opts/args instead, add the field to the key:
+#   -a "sim.opts+=+foo"      append to sim opts
+#   -a "sim.opts=+foo"       replace sim opts
+#   -a "sim.pre.cmd="        clear sim pre_phase cmd (step skipped)
+#
+# `extends:` inherits (deep-merges) another model; `abstract: true` hides it.
+#
+# Reuse with YAML anchors (defined in the master's `anchors:` section):
+#   compile: *vcs_compile         reuse a block as-is
+#   sim:                          reuse it and override some keys:
+#     <<: *vcs_sim                  (merge is shallow: an overridden key
+#     phase: {...}                   replaces that whole sub-block)
+# -----------------------------------------------------------------------------
+models:
+
+  # ---- shared VCS recipe --------------------------------------------------
+  vcs_base:
+    abstract: true
+    phases:
+      compile: *vcs_compile
+      elab: *vcs_elab
+      sim: *vcs_sim
+
+  dut_a:
+    extends: vcs_base
+    testlist: testlists/dut_a_tests.yml
+
+  dut_b:
+    extends: vcs_base
+    testlist: testlists/dut_b_tests.yml
+    slurm:
+      partition: dv_long
+    phases:
+      sim:
+        phase:
+          args: "-l sim.log +dut_b_mode=fast"
+
+  # ---- reuse by YAML anchor (no extends) -----------------------------------
+  dut_c:
+    testlist: testlists/dut_b_tests.yml
+    phases:
+      compile: *vcs_compile               # same compile phase as vcs_base
+      elab: *vcs_elab                     # same elab phase
+      sim:
+        <<: *vcs_sim                      # pre_phase + post_phase from the master
+        phase:
+          <<: *vcs_sim_main               # cmd + opts from the master
+          args: "-l sim.log +dut_c_mode=1"  # only args changed
+
+  # ---- runnable anywhere (echo only) - use it to try the flow -------------
+  demo:
+    testlist: testlists/demo_tests.yml
+    phases:
+      compile: *demo_compile
+      elab: *demo_elab
+      sim:
+        pre_phase:  {cmd: echo, args: "[pre ] test={{ test.name }} section={{ test.section }}"}
+        phase:
+          cmd: echo
+          opts: "+ntb_random_seed={{ seed }} +UVM_MAX_QUIT_COUNT={{ test.max_quit_count | default(uvm_max_quit_count) }},NO"
+          args: "+UVM_VERBOSITY={{ verbosity }}{{ ' -gui' if gui else '' }}{{ ' -cm ' ~ cov_types ~ ' -cm_name ' ~ test.name ~ '.' ~ seed if coverage else '' }}"
+        post_phase:
+          cmd: "{{ check_log }}"
+          opts: "--rules {{ log_rules }} --profile {{ test.log_profile | default('demo') }} --test {{ test.name }}.{{ seed }}"
+          args: --log sim.phase.log
+
+  # ---- runnable anchor example: demo's compile/elab, its own sim ----------
+  demo2:
+    testlist: testlists/demo_tests.yml
+    phases:
+      compile: *demo_compile
+      elab: *demo_elab
+      sim:
+        phase: {cmd: echo, args: "[main] demo2 sim seed={{ seed }}"}

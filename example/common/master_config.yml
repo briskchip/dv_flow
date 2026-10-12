@@ -1,0 +1,213 @@
+# =============================================================================
+# Master config: shared variables, phases, slurm settings and anchors.
+#
+# A project config pulls it in with, as its first line:
+#     {% include 'common/master_config.yml' %}
+# Jinja pastes this file in as text, so its YAML anchors (&name) can be used
+# with *name in the including file. Top-level keys that appear in both files
+# (variables:, phases:, slurm:, models:, ...) are deep-merged and the
+# including file wins, so a project only writes what it changes.
+#
+# Rendered with Jinja2 before YAML parsing, once per job, with this context:
+#   env          - environment variables        e.g. env.HOME
+#   config_dir   - directory of the config given with -c
+#   cwd, user, date
+#   time         - run timestamp YYYYmmdd_HHMMSS (same for the whole invocation)
+#   model        - model being run
+#   test         - test entry: test.name (testcase), test.testname, test.description,
+#                  test.section, plus any extra field set on the test list entry
+#                  (e.g. test.verbosity)  (for build jobs: name/testname = "build")
+#   seed         - seed of this run (0 for build jobs)
+#   gui          - true when --gui / slurm.gui is set
+#   coverage     - test jobs: the testcase's `coverage` (test list, section or test);
+#                  build job: true if any test being run has coverage on.
+#                  Force with -D coverage=true / -D coverage=false
+#   mode         - local | batch | interactive
+#   python       - the Python running dv_flow;  flow_dir - directory of dv_flow.py
+#   + everything in `variables:` (master + project), and -D KEY=VALUE from the
+#     command line (-D beats `variables`).
+# =============================================================================
+
+variables:
+  proj_root:  "{{ env.PROJ_ROOT | default(config_dir) }}"
+  out_dir:    "{{ proj_root }}/out"
+  # build-scope phases run once in build_dir; test-scope phases per test+seed in run_dir
+  build_dir:  "{{ out_dir }}/{{ model }}/build"
+  run_dir:    "{{ out_dir }}/{{ model }}/tests/{{ test.name }}.{{ seed }}"
+  # simulation executable: elab writes <simv_dir>/<simv_name> (+ <simv_name>.daidir),
+  # each test links both into its run_dir and runs ./<simv_name>
+  simv_dir:   "{{ build_dir }}"
+  simv_name:  simv
+  # debug / GUI tool: dve (default) or verdi. verdi adds -kdb to vlogan and vcs;
+  # --gui runs the sim with -gui=<debug_tool>
+  debug_tool: dve
+  # waves: a test with `waves: true` (or a run with --dump-waves) writes
+  # <run_dir>/<wave_file>; --open-waves opens it (see the `waves:` section below)
+  wave_file:  waves.vpd
+  wave_scope: "{{ tb_top }}"  # hierarchy to dump
+  wave_depth: 0               # 0 = all levels below wave_scope
+  tb_top:     tb_top
+  verbosity:  UVM_MEDIUM
+  uvm_max_quit_count: 10      # sim stops after this many UVM_ERRORs (per testcase: max_quit_count)
+  # coverage (used when `coverage` is on)
+  cov_types:  line+cond+fsm+tgl+branch+assert
+  cov_dir:    "{{ out_dir }}/{{ model }}/cov/{{ model }}.vdb"
+  # pass/fail check of the sim log (scripts/check_log.py); per testcase: log_profile
+  log_rules:   "{{ config_dir }}/common/log_check.yml"
+  log_profile: uvm
+  check_log:   "{{ python }} {{ flow_dir }}/scripts/check_log.py"
+
+# -----------------------------------------------------------------------------
+# Phases: user defined, executed in the order listed here.
+#   scope: build -> runs once per invocation (shared by all tests)
+#   scope: test  -> runs once per test/seed
+#   test_args    -> (test scope only) args the flow adds for the selected testcase
+#   fail_patterns-> regexes (case-insensitive; keep to grep -E syntax) checked in
+#                   each step's log after it ends; a match fails the step even if
+#                   the tool exited 0, and the following steps are not run
+# -----------------------------------------------------------------------------
+phases:
+  compile:
+    scope: build
+    description: Compile RTL + testbench
+    fail_patterns: ["error-"]       # VCS: Error-[SE] ..., Error-[URMI] ...
+  elab:
+    scope: build
+    description: Elaborate design snapshot
+  sim:
+    scope: test
+    description: Run simulation
+    # Added by the flow to this phase's main command, before the phase args:
+    #   cmd opts args <test_args> <phase_args>
+    test_args: "+UVM_TESTNAME={{ test.testname }}"
+
+# -----------------------------------------------------------------------------
+# Slurm. Command-line overrides: --slurm/--local, --mode batch|interactive, --gui
+# A model can override any of these with its own `slurm:` block.
+# -----------------------------------------------------------------------------
+slurm:
+  enable: false
+  mode: batch                  # batch (sbatch, parallel) | interactive (srun --pty, blocking)
+  gui: false
+  partition: dv
+  mem: 8G                      # --mem; per testcase: slurm_mem, per run: --slurm-mem
+  options:                     # added to every slurm job (more per run: --slurm-opt)
+    - --cpus-per-task=2
+  # Time limit (sbatch/srun --time); slurm kills the job when it is reached.
+  # Formats: 1h, 90m, 2h30m, 1d12h, 45 (minutes), 01:30:00, 1-00:00:00, unlimited
+  timeout: 1h                  # every test job; per testcase: slurm_timeout, per run: --slurm-timeout
+  build_timeout: 2h            # the compile/elab job
+  gui_options: [--x11]         # added when running a GUI job
+  batch:
+    cmd: sbatch
+    options: [--parsable]
+  interactive:
+    cmd: srun
+    options: [--pty]
+  job_name: "{{ test.testname }}.{{ seed }}.{{ time }}"
+  build_job_name: "{{ model }}.build.{{ time }}"
+
+# -----------------------------------------------------------------------------
+# Waves viewer: python dv_flow.py --model=dut_a --testcase=smoke --open-waves
+# Opens <run_dir>/<wave_file> of the newest run of the testcase (or of --seed),
+# or the file given with --waves-file. {{ wave_path }} is the wave file,
+# {{ wave_dir }} its directory. The viewer runs in <wave_dir>/waves_view/.
+# -----------------------------------------------------------------------------
+waves:
+  viewer:
+    cmd: dve
+    opts: -full64
+    args: "-vpd {{ wave_path }}"
+  job_name: "waves.{{ test.name }}.{{ time }}"
+  # Slurm settings for the viewer job only, merged over `slurm:` above.
+  # Per run: --slurm-mem=32G, --slurm-timeout=8h, --slurm-opt=..., --local
+  slurm:
+    enable: true               # open on slurm (--local opens on this machine)
+    mode: interactive          # srun --pty: attached to your terminal
+    gui: true                  # adds gui_options (--x11)
+    timeout: 4h
+    mem: 16G                   # big VPD files need memory in DVE
+    options:
+      - --cpus-per-task=2
+
+# -----------------------------------------------------------------------------
+# Anchors: reusable phase blocks. The flow ignores the `anchors:` key itself;
+# it only exists to hold &definitions that models use with *name / <<: *name.
+# -----------------------------------------------------------------------------
+anchors:
+
+  # ---- VCS ----------------------------------------------------------------
+  vcs_compile: &vcs_compile
+    pre_phase:
+      cmd: mkdir -p csrc
+    phase:
+      cmd: vlogan
+      opts:
+        - -full64
+        - -sverilog
+        - -ntb_opts uvm-1.2
+        - -timescale=1ns/1ps
+        {% if debug_tool == 'verdi' %}
+        - -kdb                         # Verdi knowledge database (not needed for DVE)
+        {% endif %}
+      args: "-f {{ proj_root }}/{{ model }}/filelist.f"
+
+  vcs_elab: &vcs_elab
+    pre_phase:
+      cmd: mkdir -p
+      args: "{{ simv_dir }}"
+    phase:
+      cmd: vcs
+      opts:
+        - -full64
+        - -debug_access+all            # debug visibility for DVE and Verdi
+        {% if debug_tool == 'verdi' %}
+        - -kdb
+        {% endif %}
+        {% if coverage %}
+        - -cm {{ cov_types }} -cm_dir {{ cov_dir }}
+        {% endif %}
+      args: "{{ tb_top }} -o {{ simv_dir }}/{{ simv_name }}"
+
+  vcs_sim: &vcs_sim
+    # Files written into the run directory before the steps run. With waves on,
+    # waves.tcl makes simv dump <wave_file> (VPD) through UCLI.
+    files:
+      {% if dump_waves %}
+      waves.tcl: |
+        dump -file {{ wave_file }} -type VPD
+        dump -add {{ wave_scope }} -depth {{ wave_depth }} -aggregates
+        run
+        quit
+      {% endif %}
+    pre_phase:
+      cmd: ln -sf
+      args: "{{ simv_dir }}/{{ simv_name }} {{ simv_dir }}/{{ simv_name }}.daidir ."
+    phase: &vcs_sim_main               # just the main sim command
+      cmd: "./{{ simv_name }}"
+      opts:
+        - +ntb_random_seed={{ seed }}
+        - +UVM_VERBOSITY={{ test.verbosity | default(verbosity) }}
+        - +UVM_MAX_QUIT_COUNT={{ test.max_quit_count | default(uvm_max_quit_count) }},NO
+        - "{{ '+UVM_TIMEOUT=' ~ test.timeout if test.timeout is defined else '' }}"
+        - "{{ '-gui=' ~ debug_tool if gui else '' }}"   # -gui=dve / -gui=verdi with --gui
+        {% if coverage %}
+        - -cm {{ cov_types }} -cm_dir {{ cov_dir }} -cm_name {{ test.name }}.{{ seed }}
+        {% endif %}
+        {% if dump_waves %}
+        - -ucli -do waves.tcl          # dump waves (script written by `files:` above)
+        {% endif %}
+      args: -l sim.log
+    post_phase:                        # PASS/FAIL from sim.log, rules in common/log_check.yml
+      cmd: "{{ check_log }}"
+      opts: "--rules {{ log_rules }} --profile {{ test.log_profile | default(log_profile) }} --test {{ test.name }}.{{ seed }}"
+      args: --log sim.log
+
+  # ---- echo-only demo (runs anywhere) ------------------------------------
+  demo_compile: &demo_compile
+    pre_phase:  {cmd: echo, args: "[pre ] compile setup for {{ model }}"}
+    phase:      {cmd: echo, opts: "-sverilog", args: "[main] compiling filelist.f"}
+    post_phase: {cmd: "echo [post] compile done"}
+
+  demo_elab: &demo_elab
+    phase:      {cmd: echo, opts: "-debug_access+all{{ ' -cm ' ~ cov_types if coverage else '' }}", args: "[main] elaborating {{ tb_top }}"}

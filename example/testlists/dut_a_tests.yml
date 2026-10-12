@@ -1,0 +1,53 @@
+{% include 'common_tests.yml' %}
+# =============================================================================
+# Test list for dut_a. Variables, anchors and the field reference are in
+# common_tests.yml (included above).
+# =============================================================================
+
+sections:
+  sanity:
+    <<: *sanity_defaults                # seed 1, count 1, coverage off
+    tests:
+      - testcase: smoke
+        testname: dut_a_smoke_test
+        description: Reset + single read/write
+        phase_args: *low_verbosity      # shared phase_args from the master
+
+      - testcase: reg_access
+        testname: dut_a_reg_test
+        description: Register bit-bash
+        phase_args:
+          sim: +REG_SEQ=bit_bash
+        seed: 100                       # overrides the section default
+        count: 2
+        slurm_timeout: 15m              # short test: kill after 15 minutes (default 1h)
+
+      - testcase: reg_reset
+        testname: dut_a_reg_test        # same UVM test as reg_access
+        coverage: true                  # single test with coverage in a section without it
+        description: Register reset values
+        phase_args:
+          sim: +REG_SEQ=hw_reset
+          "sim.opts+": +REG_RESET_CHECK=1   # appended to the sim opts from config.yml
+        verbosity: UVM_HIGH             # extra option -> test.verbosity
+        timeout: "1ms,NO"               # extra option -> test.timeout
+        max_quit_count: 50              # overrides uvm_max_quit_count (10) for this testcase
+        log_profile: uvm_verdict        # also require 'TEST PASSED' (common/log_check.yml)
+        waves: true                     # dump waves.vpd; open with --open-waves
+        slurm_mem: 16G                  # --mem for this test's slurm job (default slurm.mem 8G)
+
+  regression:
+    <<: *regress_defaults               # random seed, regress_count runs, coverage on
+    slurm_timeout: 3h                   # section default for every regression test
+    tests:
+{% for kind in ['read', 'write', 'mixed'] %}
+      - testcase: rand_{{ kind }}
+        testname: dut_a_rand_test
+        description: Randomized {{ kind }} traffic
+        phase_args:
+          sim: +traffic={{ kind }} +num_txn=1000
+{% if kind == 'mixed' %}
+        coverage: false                 # test overrides the section
+        slurm-timeout: 4h               # hyphenated spelling works too
+{% endif %}
+{% endfor %}

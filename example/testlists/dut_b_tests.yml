@@ -1,0 +1,10 @@
+{% include 'common_tests.yml' %}
+# Test list for dut_b (field reference: common_tests.yml)
+sections:
+  sanity:
+    <<: *sanity_defaults
+    tests:
+      - testcase: smoke
+        testname: dut_b_smoke_test
+        description: Basic bring-up
+        phase_args: *low_verbosity
